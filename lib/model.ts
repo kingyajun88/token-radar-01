@@ -397,15 +397,22 @@ export function farmSteps(
   const hold = holdDaysFor(age);
   const sunk = sunkGasUsd(capital, hold);
   const verdict = verdictFor(implied);
+  // The verdict is a bar on implied value, not a claim that the gas
+  // bill exceeds it: a farmer's share of any future distribution is
+  // a small fraction of implied value, so a low implied value means
+  // a low expected payout next to the time and the lock-up. The text
+  // states the bar, never a false gas comparison.
   const verdictLine =
     verdict === 'farm'
-      ? `Verdict: farm it. Implied value $${implied.toLocaleString('en-US')} against $${sunk} of sunk gas over ${hold} days; the $${capital} of capital comes back when you exit.`
+      ? `Verdict: farm it. Implied value $${implied.toLocaleString('en-US')} clears the $75M bar for a full position; sunk gas is only $${sunk} over ${hold} days, and the $${capital} of capital comes back when you exit.`
       : verdict === 'small'
-        ? `Verdict: farm it small. Implied value $${implied.toLocaleString('en-US')} is thin for a full position, so test with $25 first and scale only if the position behaves.`
-        : `Verdict: watch only. Implied value $${implied.toLocaleString('en-US')} does not cover the $${sunk} of sunk gas and the time, so do not deploy capital yet.`;
+        ? `Verdict: farm it small. Implied value $${implied.toLocaleString('en-US')} is below the $75M bar for a full position, so test with $25 first and scale only if the position behaves.`
+        : `Verdict: watch only. Implied value $${implied.toLocaleString('en-US')} is below the $25M bar for deploying capital, so the expected share of any future distribution is small next to the time and lock-up; watch it instead of farming now.`;
+  const verdictCost =
+    verdict === 'watch' ? 'nothing to spend yet' : `$${sunk} of sunk gas in total`;
   const action = actionFor(p, capital, chain);
   const base: FarmStep[] = [
-    { text: verdictLine, cost: `$${sunk} of sunk gas in total`, time: `${hold} days` },
+    { text: verdictLine, cost: verdictCost, time: verdict === 'watch' ? '5 minutes a month' : `${hold} days` },
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
       cost: 'under $3 of gas for the first transaction',
