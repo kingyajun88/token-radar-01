@@ -21,11 +21,18 @@
 // in parentheses). These are each estimator's own errors, not the
 // curve's error standing in for the model:
 //   half by slug:    A 1.164 (3.20x)   B 1.067 (2.91x)   blend 1.058 (2.88x)
-//   time split:      A 1.375 (3.95x)   B 1.444 (4.24x)   blend 1.335 (3.80x)
+//   time split:      A 1.493 (4.45x)   B 1.461 (4.31x)   blend 1.511 (4.53x)
 //   (oldest half trains, newest half tests: the honest test for a
 //   radar, since a launch is always in the future)
-// The 50/50 blend of A and B beats or nearly beats each parent on
-// both splits, so the shipped model is the blend:
+// Correction (v3): v2's note reported the time split as A 1.375 /
+// B 1.444 / blend 1.335, but that run had the halves swapped — it
+// trained on the newest half and tested on the oldest half plus the
+// undated protocols, which is not the honest test. The numbers above
+// are the honest split, re-run from the same protocol. The model
+// itself is unchanged: on the slug split the blend beats both
+// parents, on the honest time split it sits within 0.05 of each
+// parent, and no single estimator wins on both splits, so the
+// 50/50 blend stays the shipped model:
 //   implied = exp(0.5 x ln(A) + 0.5 x ln(B))
 // Category dummies and a full multivariate fit were tried and
 // rejected: with 64 training comps they overfit and score worse on
@@ -151,13 +158,23 @@ export interface Calibration {
   held_out_median_abs_log_error: number;
   /** The blend's own held-out errors, fitted on each split's train half only. */
   blend_slug_error: number;
+  /** Honest time split: oldest half trains, newest half tests. */
   blend_time_error: number;
   /** The v1 composite's own held-out errors, same splits, same metric. */
   v1_slug_error: number;
+  /** Honest time split: oldest half trains, newest half tests. */
   v1_time_error: number;
   /** The comps curve's own held-out errors, same splits, same metric. */
   curve_slug_error: number;
+  /** Honest time split: oldest half trains, newest half tests. */
   curve_time_error: number;
+  /** What v2's note reported for the time split (A 1.375 / B 1.444 /
+   * blend 1.335). That run had the halves swapped — newest half trained,
+   * oldest half plus the undated protocols tested — so it is kept here
+   * only as the record of what v2 claimed, not as a result. */
+  blend_time_reported_error: number;
+  v1_time_reported_error: number;
+  curve_time_reported_error: number;
 }
 
 export const CALIBRATION: Calibration = {
@@ -167,11 +184,14 @@ export const CALIBRATION: Calibration = {
   log_slope_half_train: 0.64,
   held_out_median_abs_log_error: 1.07,
   blend_slug_error: 1.058,
-  blend_time_error: 1.335,
+  blend_time_error: 1.511,
   v1_slug_error: 1.164,
-  v1_time_error: 1.375,
+  v1_time_error: 1.493,
   curve_slug_error: 1.067,
-  curve_time_error: 1.444,
+  curve_time_error: 1.461,
+  blend_time_reported_error: 1.335,
+  v1_time_reported_error: 1.375,
+  curve_time_reported_error: 1.444,
 };
 
 /** A farm step: action, what it costs, how long it takes. */

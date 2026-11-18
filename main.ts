@@ -1,4 +1,8 @@
 // Token Radar entry, model radar-3-blend (Node 22, standard library only).
+// v3: the scoring model is unchanged from v2; this version corrects the
+// blind-test time-split numbers the method note reports (v2's note had
+// the halves swapped) and makes the board's verdicts easier to scan
+// (expected farmer share under each verdict, top pick in the lede).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every pre-token protocol with the comparables
