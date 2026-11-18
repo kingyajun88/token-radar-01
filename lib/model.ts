@@ -1,49 +1,51 @@
-// Token Radar model, version radar-2-comps.
+// Token Radar model, version radar-3-blend.
 //
-// What this model is: a comparables calibration, not a flat multiple.
-// The sealed snapshot carries 128 protocols whose token already trades
-// (market cap > 0). For each of them we can see the ratio the market
-// actually paid: market cap / TVL. That ratio is not one number:
+// What this model is: a blend of two comparables estimators, picked by
+// out-of-sample error, not by taste. The sealed snapshot carries 128
+// protocols whose token already trades (market cap > 0). For each of
+// them we can see the ratio the market actually paid: market cap / TVL.
+// That ratio is not one number: the median across all 128 is 0.214,
+// by category the raw medians run from 0.041 (Liquid Staking) to 2.205
+// (Cross Chain Bridge, only 4 comps), and a log-log fit of market cap
+// on TVL has elasticity 0.52, so a big protocol trades at a lower
+// multiple than a small one. Two estimators were tested against each
+// other on the same 128:
 //
-//   - the median across all 128 is 0.214
-//   - by category it runs from 0.041 (Liquid Staking) to 0.746
-//     (Canonical Bridge); Lending 0.132, Dexs 0.342, Bridge 0.557,
-//     Basis Trading 0.654, RWA 0.275, Yield 0.191
-//   - a log-log fit of market cap on TVL has slope 0.52 on all 128,
-//     so a big protocol trades at a lower multiple than a small one
-//   - seven-day growth and age show no clean monotonic pattern in the
-//     same 128, so both are dampened rather than allowed to dominate
+//   A. the v1 composite: TVL x shrunk category median x size factor
+//      x growth x maturity (the v1 model, unchanged)
+//   B. the comps curve: log(mcap) = 6.9646 + 1.2026 x log10(TVL),
+//      fitted on all 128 live comps (elasticity 0.52)
 //
-// Blind test, done honestly and reported on the dashboard: fit the
-// log-log curve on half the live protocols (sorted by slug, first
-// half), test on the other half. Train slope 0.64, held-out median
-// absolute log error 1.07 — a typical miss of about 2.9x. The curve
-// is a guide, not a price. Category medians below are the full-sample
-// medians, shrunk toward the global 0.214 by n/(n+5) and capped to
-// [0.05, 0.80], so a category with only four live comps cannot drag
-// a whole row with it. Categories with fewer than four live comps
-// use the global median.
-//
-// Implied value for one pre-token protocol:
-//
-//   implied = TVL x categoryMultiple
-//                 x sizeFactor      (TVL/100M)^-0.15, clamped [0.75, 1.25]
-//                 x growthFactor    1 + clamp(change_7d, -40, 40)% x 0.35
-//                 x maturityFactor  0.85 + min(age, 1095)/1095 x 0.30
-//
-// Age is days since first listing; unknown age counts as 365 days.
-// No protocol name is ever special-cased: category, TVL, growth and
-// age are all snapshot fields, and the same function scores every row.
+// Blind tests, each estimator fitted on one half and tested on the
+// other half it never saw (median absolute log error; typical miss
+// in parentheses). These are each estimator's own errors, not the
+// curve's error standing in for the model:
+//   half by slug:    A 1.164 (3.20x)   B 1.067 (2.91x)   blend 1.058 (2.88x)
+//   time split:      A 1.375 (3.95x)   B 1.444 (4.24x)   blend 1.335 (3.80x)
+//   (oldest half trains, newest half tests: the honest test for a
+//   radar, since a launch is always in the future)
+// The 50/50 blend of A and B beats or nearly beats each parent on
+// both splits, so the shipped model is the blend:
+//   implied = exp(0.5 x ln(A) + 0.5 x ln(B))
+// Category dummies and a full multivariate fit were tried and
+// rejected: with 64 training comps they overfit and score worse on
+// both splits (1.50 / 1.80). Growth and age add nothing measurable
+// either (their fitted coefficients are ~0), so both stay dampened
+// as in v1 rather than driving the ranking.
 //
 // Farm economics, in dollars, per row. Capital is recoverable (it
 // stays in the position and comes back on exit); gas is sunk.
 //   capital: $250 / $150 / $100 / $50 by TVL tier
 //   sunk gas: setup $4-8 + $2 a week over the hold + $3 to claim
-//   verdict: implied >= $75M -> farm it; >= $25M -> farm it small
+//   expected farmer share: if 5% of the token supply goes to farmers
+//     and about 10,000 farmers qualify, one farmer's expected share
+//     is implied value x 0.05 / 10,000 = implied x 0.000005
+//   verdict: expected share >= $250 (implied >= $50M) -> farm it;
+//     expected share >= $50 (implied >= $10M) -> farm it small
 //     (test $25 first, scale only if the position behaves);
 //     below that -> watch only, do not deploy capital yet.
-// The verdict, capital and sunk gas are carried on every row so the
-// dashboard and board.json always agree about them.
+// The verdict, capital, sunk gas and expected share are carried on
+// every row so the dashboard and board.json always agree about them.
 
 /** One protocol in the sealed snapshot: exactly its ten fields. */
 export interface SnapshotProtocol {
@@ -82,6 +84,17 @@ export interface ModelConstants {
   maturity_range: number;
   maturity_days: number;
   unknown_age_days: number;
+  /** Comps curve: log(mcap) = curve_intercept + curve_slope_log10 x log10(TVL). */
+  curve_intercept: number;
+  curve_slope_log10: number;
+  /** Blend weight on the curve (0.5) vs the v1 composite (0.5). */
+  blend_curve_weight: number;
+  /** Expected farmer share: ev_share_pct of supply to farmers, ev_farmers qualifying. */
+  ev_share_pct: number;
+  ev_farmers: number;
+  /** Verdict bars on implied value, derived from the expected share. */
+  farm_bar_usd: number;
+  small_bar_usd: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -97,9 +110,16 @@ export const MODEL: ModelConstants = {
   maturity_range: 0.3,
   maturity_days: 1095,
   unknown_age_days: 365,
+  curve_intercept: 6.9646,
+  curve_slope_log10: 1.2026,
+  blend_curve_weight: 0.5,
+  ev_share_pct: 0.05,
+  ev_farmers: 10000,
+  farm_bar_usd: 50_000_000,
+  small_bar_usd: 10_000_000,
 };
 
-export const MODEL_VERSION = 'radar-2-comps';
+export const MODEL_VERSION = 'radar-3-blend';
 
 /** Pre-token rows below the watchlist floor, by TVL: 40 + 180 = 220. */
 export const EARLY_ROWS = 180;
@@ -129,6 +149,15 @@ export interface Calibration {
   log_slope_full: number;
   log_slope_half_train: number;
   held_out_median_abs_log_error: number;
+  /** The blend's own held-out errors, fitted on each split's train half only. */
+  blend_slug_error: number;
+  blend_time_error: number;
+  /** The v1 composite's own held-out errors, same splits, same metric. */
+  v1_slug_error: number;
+  v1_time_error: number;
+  /** The comps curve's own held-out errors, same splits, same metric. */
+  curve_slug_error: number;
+  curve_time_error: number;
 }
 
 export const CALIBRATION: Calibration = {
@@ -137,6 +166,12 @@ export const CALIBRATION: Calibration = {
   log_slope_full: 0.52,
   log_slope_half_train: 0.64,
   held_out_median_abs_log_error: 1.07,
+  blend_slug_error: 1.058,
+  blend_time_error: 1.335,
+  v1_slug_error: 1.164,
+  v1_time_error: 1.375,
+  curve_slug_error: 1.067,
+  curve_time_error: 1.444,
 };
 
 /** A farm step: action, what it costs, how long it takes. */
@@ -162,6 +197,9 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  curve_value_usd: number;
+  composite_value_usd: number;
+  expected_share_usd: number;
   verdict: 'farm' | 'small' | 'watch';
   capital_usd: number;
   sunk_gas_usd: number;
@@ -190,6 +228,9 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  curve_value_usd: number;
+  composite_value_usd: number;
+  expected_share_usd: number;
   verdict: 'farm' | 'small' | 'watch';
   capital_usd: number;
   sunk_gas_usd: number;
@@ -266,13 +307,35 @@ export function sizeFactor(tvlUsd: number): number {
   return Math.min(MODEL.size_max, Math.max(MODEL.size_min, raw));
 }
 
-/** The multipliers and implied value for one protocol. */
+/** The comps curve's own implied value: the fitted log-log curve, no category. */
+export function curveValue(
+  protocol: SnapshotProtocol,
+  model: ModelConstants = MODEL,
+): number {
+  const log10tvl = Math.log10(Math.max(protocol.tvl_usd, 1));
+  return Math.max(
+    1,
+    Math.round(Math.exp(model.curve_intercept + model.curve_slope_log10 * log10tvl)),
+  );
+}
+
+/** One farmer's expected share of a future distribution, under stated assumptions. */
+export function expectedShareUsd(
+  implied: number,
+  model: ModelConstants = MODEL,
+): number {
+  return Math.round(implied * (model.ev_share_pct / model.ev_farmers));
+}
+
+/** The multipliers and implied value for one protocol: the 50/50 blend. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants = MODEL,
 ): {
   implied: number;
+  composite: number;
+  curve: number;
   catMult: number;
   sizeF: number;
   growthPct: number;
@@ -290,11 +353,17 @@ export function impliedValue(
   const maturityMult =
     model.maturity_floor +
     (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const implied = Math.max(
+  const composite = Math.max(
     1,
     Math.round(protocol.tvl_usd * catMult * sizeF * growthMult * maturityMult),
   );
-  return { implied, catMult, sizeF, growthPct, growthMult, maturityMult, age };
+  const curve = curveValue(protocol, model);
+  const w = model.blend_curve_weight;
+  const implied = Math.max(
+    1,
+    Math.round(Math.exp(w * Math.log(curve) + (1 - w) * Math.log(composite))),
+  );
+  return { implied, composite, curve, catMult, sizeF, growthPct, growthMult, maturityMult, age };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -337,10 +406,12 @@ export function sunkGasUsd(capital: number, holdDays: number): number {
   return setup + 2 * weeks + 3;
 }
 
-/** Verdict from implied value alone, so it is reproducible from the row. */
+/** Verdict from implied value alone, so it is reproducible from the row.
+ * The bars are the expected-share bars: farm when the expected share
+ * clears $250 (implied $50M), small when it clears $50 (implied $10M). */
 export function verdictFor(implied: number): 'farm' | 'small' | 'watch' {
-  if (implied >= 75_000_000) return 'farm';
-  if (implied >= 25_000_000) return 'small';
+  if (implied >= MODEL.farm_bar_usd) return 'farm';
+  if (implied >= MODEL.small_bar_usd) return 'small';
   return 'watch';
 }
 
@@ -397,17 +468,19 @@ export function farmSteps(
   const hold = holdDaysFor(age);
   const sunk = sunkGasUsd(capital, hold);
   const verdict = verdictFor(implied);
-  // The verdict is a bar on implied value, not a claim that the gas
-  // bill exceeds it: a farmer's share of any future distribution is
-  // a small fraction of implied value, so a low implied value means
-  // a low expected payout next to the time and the lock-up. The text
-  // states the bar, never a false gas comparison.
+  const share = expectedShareUsd(implied);
+  // The verdict is a bar on the expected farmer share, not a claim
+  // that the gas bill exceeds it: a farmer's share of any future
+  // distribution is a small fraction of implied value, so a low
+  // implied value means a low expected payout next to the time and
+  // the lock-up. The text states the bar and the arithmetic behind
+  // it, never a false gas comparison.
   const verdictLine =
     verdict === 'farm'
-      ? `Verdict: farm it. Implied value $${implied.toLocaleString('en-US')} clears the $75M bar for a full position; sunk gas is only $${sunk} over ${hold} days, and the $${capital} of capital comes back when you exit.`
+      ? `Verdict: farm it. Implied value $${implied.toLocaleString('en-US')} clears the $50M bar: at 5% of supply to farmers and about 10,000 farmers qualifying, the expected share is about $${share.toLocaleString('en-US')}, against only $${sunk} of sunk gas over ${hold} days, and the $${capital} of capital comes back when you exit.`
       : verdict === 'small'
-        ? `Verdict: farm it small. Implied value $${implied.toLocaleString('en-US')} is below the $75M bar for a full position, so test with $25 first and scale only if the position behaves.`
-        : `Verdict: watch only. Implied value $${implied.toLocaleString('en-US')} is below the $25M bar for deploying capital, so the expected share of any future distribution is small next to the time and lock-up; watch it instead of farming now.`;
+        ? `Verdict: farm it small. Implied value $${implied.toLocaleString('en-US')} is below the $50M bar for a full position, so the expected share of about $${share.toLocaleString('en-US')} only justifies a $25 test; scale only if the position behaves.`
+        : `Verdict: watch only. Implied value $${implied.toLocaleString('en-US')} is below the $10M bar, so the expected share of about $${share.toLocaleString('en-US')} is small next to the time and lock-up; watch it instead of farming now.`;
   const verdictCost =
     verdict === 'watch' ? 'nothing to spend yet' : `$${sunk} of sunk gas in total`;
   const action = actionFor(p, capital, chain);
@@ -510,6 +583,9 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    curve_value_usd: row.curve_value_usd,
+    composite_value_usd: row.composite_value_usd,
+    expected_share_usd: row.expected_share_usd,
     verdict: row.verdict,
     capital_usd: row.capital_usd,
     sunk_gas_usd: row.sunk_gas_usd,
@@ -565,6 +641,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       token_status: 'pre-token' as const,
       age_days: s.age,
       implied_value_usd: s.implied,
+      curve_value_usd: s.curve,
+      composite_value_usd: s.composite,
+      expected_share_usd: expectedShareUsd(s.implied),
       verdict,
       capital_usd: capital,
       sunk_gas_usd: sunk,

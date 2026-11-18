@@ -1,4 +1,4 @@
-// Token Radar dashboard, model radar-2-comps. Reads window.RADAR (written
+// Token Radar dashboard, model radar-3-blend. Reads window.RADAR (written
 // beside dashboard/ by main.ts) and renders the ranked board, a filterable
 // table, and a per-protocol detail view with the model's own inputs and
 // the farm plan board.json carries for that row. No network: every byte
@@ -43,13 +43,17 @@
   }
 
   // Recompute a row from the snapshot figures, using the row's own
-  // category multiple and size factor, to check the board's number.
+  // category multiple and size factor for the composite half, and the
+  // fitted comps curve for the other half, to check the board's number.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * row.category_multiple * row.size_factor * growthMult * maturity));
+    var composite = Math.max(1, Math.round(row.tvl_usd * row.category_multiple * row.size_factor * growthMult * maturity));
+    var curve = Math.max(1, Math.round(Math.exp(model.curve_intercept + model.curve_slope_log10 * Math.log10(Math.max(row.tvl_usd, 1)))));
+    var w = model.blend_curve_weight;
+    return Math.max(1, Math.round(Math.exp(w * Math.log(curve) + (1 - w) * Math.log(composite))));
   }
 
   function el(tag, attrs) {
@@ -274,16 +278,16 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x categoryMultiple x sizeFactor x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = exp( 0.5 x ln(composite) + 0.5 x ln(curve) ), where composite = round( tvl_usd x categoryMultiple x sizeFactor x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ) and curve = exp(' + m.curve_intercept + ' + ' + m.curve_slope_log10 + ' x log10(tvl_usd))'
       ),
-      el('p', { class: 'sub', text: 'sizeFactor = (tvl_usd / $100M)^-0.15, clamped to 0.75..1.25: big protocols trade at a lower multiple. Age is the time since the protocol was first listed; an unlisted age uses ' + m.unknown_age_days + ' days. Growth and age showed no clean pattern in the live comps, so both are dampened.' }),
+      el('p', { class: 'sub', text: 'sizeFactor = (tvl_usd / $100M)^-0.15, clamped to 0.75..1.25: big protocols trade at a lower multiple. The curve is the log-log fit of market cap on TVL over all 128 live comps (elasticity ' + c.log_slope_full + '). Age is the time since the protocol was first listed; an unlisted age uses ' + m.unknown_age_days + ' days. Growth and age showed no clean pattern in the live comps, so both are dampened.' }),
       el('h3', { text: 'Comparables: market cap / TVL among the ' + c.live_comps + ' live-token protocols' }),
       el('table', { class: 'comps' },
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple (shrunk median)' }))),
         el('tbody', null, compRows)
       ),
-      el('p', { class: 'sub', text: 'Global median 0.214. Each multiple is its category median, shrunk toward the global by n/(n+5) and capped to 0.05..0.80. Blind test: fit the log-log curve of market cap on TVL on half the live protocols (slope ' + c.log_slope_half_train + '), test on the other half: median absolute log error ' + c.held_out_median_abs_log_error + ' (about 2.9x). Full-sample slope ' + c.log_slope_full + '. The curve is a guide, not a price.' }),
-      el('p', { class: 'sub', text: 'Farm verdicts are net economics, not slogans: capital is recoverable, only gas is sunk (setup $4-8, $2 a week, $3 to claim). Farm it means implied value at least $75M; farm it small means $25M-75M and a $25 test first; watch only means below $25M and no capital deployed yet.' })
+      el('p', { class: 'sub', text: 'Global median 0.214. Each multiple is its category median, shrunk toward the global by n/(n+5) and capped to 0.05..0.80. Blind tests, each estimator fitted on one half and tested on the other half it never saw (median absolute log error; typical miss in parentheses) — these are each estimator\'s own errors: half by slug, composite ' + c.v1_slug_error + ' (3.20x), curve ' + c.curve_slug_error + ' (2.91x), blend ' + c.blend_slug_error + ' (2.88x); time split (oldest half trains, newest half tests), composite ' + c.v1_time_error + ' (3.95x), curve ' + c.curve_time_error + ' (4.24x), blend ' + c.blend_time_error + ' (3.80x). The 50/50 blend beats or nearly beats each parent on both splits, so it is the shipped model. The curve alone on half the comps has slope ' + c.log_slope_half_train + ' and held-out error ' + c.held_out_median_abs_log_error + ' (about 2.9x). Category dummies and a full multivariate fit were tried and rejected: they overfit on 64 training comps and score worse on both splits. The curve is a guide, not a price.' }),
+      el('p', { class: 'sub', text: 'Farm verdicts are net economics, not slogans: capital is recoverable, only gas is sunk (setup $4-8, $2 a week, $3 to claim). The expected farmer share assumes 5% of the token supply goes to farmers and about 10,000 farmers qualify, so one share is implied value x 0.05 / 10,000. Farm it means the share is at least $250 (implied value at least $50M); farm it small means at least $50 (implied value at least $10M) and a $25 test first; watch only means below $50 and no capital deployed yet.' })
     );
   }
 
@@ -305,7 +309,7 @@
       ),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
-    dialog.appendChild(el('div', null, el('span', { class: 'verdict ' + row.verdict, text: verdictLabel(row.verdict) + '  ·  capital $' + row.capital_usd + '  ·  sunk gas $' + row.sunk_gas_usd + ' over ' + row.hold_days + ' days' })));
+    dialog.appendChild(el('div', null, el('span', { class: 'verdict ' + row.verdict, text: verdictLabel(row.verdict) + '  ·  expected share $' + row.expected_share_usd + '  ·  capital $' + row.capital_usd + '  ·  sunk gas $' + row.sunk_gas_usd + ' over ' + row.hold_days + ' days' })));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Implied value' }),
       el('div', { class: 'equation' },
@@ -316,6 +320,9 @@
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+        el('div', null, el('span', { text: 'Composite value' }), el('b', { class: 'num', text: fmtUsd(row.composite_value_usd) })),
+        el('div', null, el('span', { text: 'Comps curve value' }), el('b', { class: 'num', text: fmtUsd(row.curve_value_usd) })),
+        el('div', null, el('span', { text: 'Expected farmer share' }), el('b', { class: 'num', text: fmtUsd(row.expected_share_usd) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })

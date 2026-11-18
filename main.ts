@@ -1,4 +1,4 @@
-// Token Radar entry, model radar-2-comps (Node 22, standard library only).
+// Token Radar entry, model radar-3-blend (Node 22, standard library only).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every pre-token protocol with the comparables
