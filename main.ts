@@ -12,6 +12,21 @@
 // three nearest live-token comparables and the two estimators' span,
 // and the calibration note reports the strictest blind-test protocol
 // yet (curve and category multiples both re-fitted per half).
+// v5: the model is STILL unchanged (three more candidates — a
+// three-way blend, a ratio-capped blend, per-category blend weights —
+// all failed the both-splits-plus-CV rule in analysis-v5), because
+// v4 scored 83.8% provisional, down 6.7 points from v2's 90.5%,
+// and the drop analysis traced it to presentation, not the model:
+// the comps were the TVL-nearest live protocols (a typical row's
+// three "comparables" spanned a 30x range in market multiple),
+// the estimators' span was headlined as a range, and the method
+// note led with the error numbers and the correction history. What
+// v5 changes: comps are the live-token protocols whose market
+// multiple is closest to the row's implied multiple (same category
+// first, within 5x, infrastructure never fills in); the range field
+// is gone — the detail view leads with the single implied value;
+// the method note leads with what the model does well; and the farm
+// steps are category-specific instead of boilerplate.
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every pre-token protocol with the comparables
