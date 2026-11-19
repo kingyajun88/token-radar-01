@@ -3,6 +3,15 @@
 // blind-test time-split numbers the method note reports (v2's note had
 // the halves swapped) and makes the board's verdicts easier to scan
 // (expected farmer share under each verdict, top pick in the lede).
+// v4: the scoring model is still unchanged — every new estimator tried
+// (blend-weight and growth-weight sweeps, chain-count factor, curve
+// with category intercepts, expected-value re-ranking) failed the
+// both-splits-plus-CV rule, so the 50/50 blend stands. What v4 does
+// change: the early radar is selected by implied value instead of TVL
+// (selection and ranking now use the same value), each row carries its
+// three nearest live-token comparables and the two estimators' span,
+// and the calibration note reports the strictest blind-test protocol
+// yet (curve and category multiples both re-fitted per half).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every pre-token protocol with the comparables

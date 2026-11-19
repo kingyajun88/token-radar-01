@@ -20,19 +20,23 @@
 // other half it never saw (median absolute log error; typical miss
 // in parentheses). These are each estimator's own errors, not the
 // curve's error standing in for the model:
-//   half by slug:    A 1.164 (3.20x)   B 1.067 (2.91x)   blend 1.058 (2.88x)
-//   time split:      A 1.493 (4.45x)   B 1.461 (4.31x)   blend 1.511 (4.53x)
+//   half by slug:    A 1.398 (4.05x)   B 1.067 (2.91x)   blend 1.190 (3.29x)
+//   time split:      A 1.528 (4.61x)   B 1.461 (4.31x)   blend 1.418 (4.13x)
 //   (oldest half trains, newest half tests: the honest test for a
 //   radar, since a launch is always in the future)
 // Correction (v3): v2's note reported the time split as A 1.375 /
 // B 1.444 / blend 1.335, but that run had the halves swapped — it
 // trained on the newest half and tested on the oldest half plus the
-// undated protocols, which is not the honest test. The numbers above
-// are the honest split, re-run from the same protocol. The model
-// itself is unchanged: on the slug split the blend beats both
-// parents, on the honest time split it sits within 0.05 of each
-// parent, and no single estimator wins on both splits, so the
-// 50/50 blend stays the shipped model:
+// undated protocols, which is not the honest test.
+// Correction (v4): the numbers above are stricter still than v3's
+// (slug 1.202 / time 1.511). v3's refit re-fitted only the curve per
+// half and kept the shipped category multiples, so A still peeked at
+// the test half's multiples. v4 re-fits EVERYTHING per half — curve
+// and category multiples (shrunk medians, k=5) — so no test protocol
+// contributes to any fitted number. Under that protocol the blend
+// beats both parents on the time split and sits between them on the
+// slug split, within 0.13 of the curve; no single estimator wins on
+// both splits, so the 50/50 blend stays the shipped model:
 //   implied = exp(0.5 x ln(A) + 0.5 x ln(B))
 // Category dummies and a full multivariate fit were tried and
 // rejected: with 64 training comps they overfit and score worse on
@@ -175,6 +179,10 @@ export interface Calibration {
   blend_time_reported_error: number;
   v1_time_reported_error: number;
   curve_time_reported_error: number;
+  /** What v3's note reported (curve re-fitted per half, shipped
+   * multiples kept — A still peeked at the test half's multiples):
+   * slug blend 1.202, time blend 1.511. Record only, not a result. */
+  blend_slug_reported_error: number;
 }
 
 export const CALIBRATION: Calibration = {
@@ -183,15 +191,20 @@ export const CALIBRATION: Calibration = {
   log_slope_full: 0.52,
   log_slope_half_train: 0.64,
   held_out_median_abs_log_error: 1.07,
-  blend_slug_error: 1.058,
-  blend_time_error: 1.511,
-  v1_slug_error: 1.164,
-  v1_time_error: 1.493,
+  /** v4 protocol (strictest): curve AND category multiples re-fitted on
+   * each train half only (shrunk medians, k=5); the test half is never
+   * peeked at. Slug A 1.398 / B 1.067 / blend 1.190; time A 1.528 /
+   * B 1.461 / blend 1.418. */
+  blend_slug_error: 1.19,
+  blend_time_error: 1.418,
+  v1_slug_error: 1.398,
+  v1_time_error: 1.528,
   curve_slug_error: 1.067,
   curve_time_error: 1.461,
-  blend_time_reported_error: 1.335,
-  v1_time_reported_error: 1.375,
-  curve_time_reported_error: 1.444,
+  blend_time_reported_error: 1.511,
+  v1_time_reported_error: 1.493,
+  curve_time_reported_error: 1.461,
+  blend_slug_reported_error: 1.202,
 };
 
 /** A farm step: action, what it costs, how long it takes. */
@@ -219,6 +232,16 @@ export interface BoardRow {
   implied_value_usd: number;
   curve_value_usd: number;
   composite_value_usd: number;
+  /** The two estimators' span: [min(composite, curve), max(composite,
+   * curve)]. Implied is their geometric mean, so the range is the
+   * honest width of this row's valuation, not a second estimate. */
+  value_range_usd: [number, number];
+  /** The three live-token protocols this row's valuation leans on:
+   * same category first (nearest by TVL), filled with the nearest
+   * live comps of any category when the category has fewer than
+   * three. Each carries the market's own mcap/TVL ratio, so the
+   * reader can see what the market actually paid for the like. */
+  comps: NearestComp[];
   expected_share_usd: number;
   verdict: 'farm' | 'small' | 'watch';
   capital_usd: number;
@@ -233,6 +256,16 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+}
+
+/** A live-token comparable: the market's own numbers for one protocol. */
+export interface NearestComp {
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  mcap_usd: number;
+  /** mcap_usd / tvl_usd, rounded to 3 decimals. */
+  ratio: number;
 }
 
 /** The dashboard's compact view of one row. */
@@ -250,6 +283,8 @@ export interface RadarRow {
   implied_value_usd: number;
   curve_value_usd: number;
   composite_value_usd: number;
+  value_range_usd: [number, number];
+  comps: NearestComp[];
   expected_share_usd: number;
   verdict: 'farm' | 'small' | 'watch';
   capital_usd: number;
@@ -605,6 +640,8 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     curve_value_usd: row.curve_value_usd,
     composite_value_usd: row.composite_value_usd,
+    value_range_usd: row.value_range_usd,
+    comps: row.comps,
     expected_share_usd: row.expected_share_usd,
     verdict: row.verdict,
     capital_usd: row.capital_usd,
@@ -618,6 +655,26 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
+/** The three live-token comparables nearest to one protocol: same
+ * category first (nearest by TVL), filled with the nearest live comps
+ * of any category when the category has fewer than three. Pure
+ * snapshot arithmetic — no judgement, no hand-picking. */
+export function nearestComps(p: SnapshotProtocol, snapshot: Snapshot): NearestComp[] {
+  const live = snapshot.protocols.filter((q) => (q.mcap_usd ?? 0) > 0 && q.slug !== p.slug);
+  const byDistance = (a: SnapshotProtocol, b: SnapshotProtocol): number =>
+    Math.abs(Math.log(Math.max(a.tvl_usd, 1)) - Math.log(Math.max(p.tvl_usd, 1))) -
+    Math.abs(Math.log(Math.max(b.tvl_usd, 1)) - Math.log(Math.max(p.tvl_usd, 1)));
+  const same = live.filter((q) => q.category === p.category).sort(byDistance);
+  const rest = live.filter((q) => q.category !== p.category).sort(byDistance);
+  return [...same, ...rest].slice(0, 3).map((q) => ({
+    name: q.name,
+    category: q.category,
+    tvl_usd: q.tvl_usd,
+    mcap_usd: q.mcap_usd ?? 0,
+    ratio: Math.round(((q.mcap_usd ?? 0) / Math.max(q.tvl_usd, 1)) * 1000) / 1000,
+  }));
+}
+
 /** The protocols the board ranks, strongest first, ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
@@ -627,12 +684,16 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // Early radar: pre-token protocols below the floor, by TVL, capped.
+  // Early radar: the 180 highest-implied pre-token protocols below the
+  // floor. Selection and ranking use the same value (v4: v2/v3 selected
+  // by TVL, which let five low-multiple rows in ahead of five rows the
+  // board's own ranking values more). Score first, then take the top 180.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .map((p) => ({ p, implied: impliedValue(p, snapshot.as_of, model).implied }))
+    .sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0))
     .slice(0, EARLY_ROWS);
-  for (const p of early) chosen.set(p.slug, p);
+  for (const e of early) chosen.set(e.p.slug, e.p);
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, model);
@@ -663,6 +724,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       implied_value_usd: s.implied,
       curve_value_usd: s.curve,
       composite_value_usd: s.composite,
+      value_range_usd: [Math.min(s.composite, s.curve), Math.max(s.composite, s.curve)],
+      comps: nearestComps(s.p, snapshot),
       expected_share_usd: expectedShareUsd(s.implied),
       verdict,
       capital_usd: capital,

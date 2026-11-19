@@ -139,7 +139,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise: it is calibrated on the 128 protocols whose token already trades, and the blind test is reported below.' }),
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds the ' + DATA.early_size + ' highest-implied pre-token protocols below that floor — selection and ranking use the same value, so no row on the board is worth less than a row left off it. Implied value is a model, not a promise: it is calibrated on the 128 protocols whose token already trades, and the blind test is reported below.' }),
         el('p', { class: 'top-pick', text: 'Top of the board: ' + top.name + ' — ' + fmtUsd(top.implied_value_usd) + ' implied value, ' + verdictLabel(top.verdict).toLowerCase() + ', expected farmer share ' + fmtUsd(top.expected_share_usd) + '.' }),
         el('div', { class: 'verdicts' },
           el('span', { class: 'pill farm', text: 'Farm it: ' + v.farm }),
@@ -291,7 +291,7 @@
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple (shrunk median)' }))),
         el('tbody', null, compRows)
       ),
-      el('p', { class: 'sub', text: 'Global median 0.214. Each multiple is its category median, shrunk toward the global by n/(n+5) and capped to 0.05..0.80. Blind tests, each estimator fitted on one half and tested on the other half it never saw (median absolute log error; typical miss in parentheses) — these are each estimator\'s own errors: half by slug, composite ' + c.v1_slug_error + ' (3.20x), curve ' + c.curve_slug_error + ' (2.91x), blend ' + c.blend_slug_error + ' (2.88x); time split (oldest half trains, newest half tests), composite ' + c.v1_time_error + ' (4.45x), curve ' + c.curve_time_error + ' (4.31x), blend ' + c.blend_time_error + ' (4.53x). On the slug split the blend beats both parents; on the time split it sits within 0.05 of each parent, and no single estimator wins on both splits, so the 50/50 blend stays the shipped model. Correction: v2\'s note reported the time split as composite ' + c.v1_time_reported_error + ', curve ' + c.curve_time_reported_error + ', blend ' + c.blend_time_reported_error + ' — that run had the halves swapped (newest half trained, oldest half plus the undated protocols tested). The numbers above are the honest split, re-run from the same protocol. The curve alone on half the comps has slope ' + c.log_slope_half_train + ' and held-out error ' + c.held_out_median_abs_log_error + ' (about 2.9x). Category dummies and a full multivariate fit were tried and rejected: they overfit on 64 training comps and score worse on both splits. The curve is a guide, not a price.' }),
+      el('p', { class: 'sub', text: 'Global median 0.214. Each multiple is its category median, shrunk toward the global by n/(n+5) and capped to 0.05..0.80. Blind tests, each estimator fitted on one half and tested on the other half it never saw (median absolute log error; typical miss in parentheses) — these are each estimator\'s own errors: half by slug, composite ' + c.v1_slug_error + ' (4.05x), curve ' + c.curve_slug_error + ' (2.91x), blend ' + c.blend_slug_error + ' (3.29x); time split (oldest half trains, newest half tests), composite ' + c.v1_time_error + ' (4.61x), curve ' + c.curve_time_error + ' (4.31x), blend ' + c.blend_time_error + ' (4.13x). On the time split the blend beats both parents; on the slug split it sits between them, within 0.13 of the curve, and no single estimator wins on both splits, so the 50/50 blend stays the shipped model. Correction: v2\'s note reported the time split as composite 1.375, curve 1.444, blend 1.335 — that run had the halves swapped (newest half trained, oldest half plus the undated protocols tested). v3\'s note reported slug blend ' + c.blend_slug_reported_error + ' and time split composite ' + c.v1_time_reported_error + ', curve ' + c.curve_time_reported_error + ', blend ' + c.blend_time_reported_error + ' — that run re-fitted only the curve per half and kept the shipped category multiples, so the composite still peeked at the test half. The numbers above are the strictest protocol yet: curve and multiples both re-fitted on each train half only, so no test protocol contributes to any fitted number. The curve alone on half the comps has slope ' + c.log_slope_half_train + ' and held-out error ' + c.held_out_median_abs_log_error + ' (about 2.9x). Category dummies and a full multivariate fit were tried and rejected: they overfit on 64 training comps and score worse on both splits. The curve is a guide, not a price.' }),
       el('p', { class: 'sub', text: 'Farm verdicts are net economics, not slogans: capital is recoverable, only gas is sunk (setup $4-8, $2 a week, $3 to claim). The expected farmer share assumes 5% of the token supply goes to farmers and about 10,000 farmers qualify, so one share is implied value x 0.05 / 10,000. Farm it means the share is at least $250 (implied value at least $50M); farm it small means at least $50 (implied value at least $10M) and a $25 test first; watch only means below $50 and no capital deployed yet.' })
     );
   }
@@ -331,6 +331,22 @@
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Why this value' }),
+      el('p', { class: 'sub', text: 'The two estimators span ' + fmtUsd(row.value_range_usd[0]) + ' to ' + fmtUsd(row.value_range_usd[1]) + ': composite ' + fmtUsd(row.composite_value_usd) + ', curve ' + fmtUsd(row.curve_value_usd) + '. Implied value ' + fmtUsd(row.implied_value_usd) + ' is their geometric mean, so a wide span means a wide honest range, not a precise price.' }),
+      el('p', { class: 'sub', text: 'The three live-token protocols nearest this one by TVL — the market\'s own numbers for the like:' }),
+      el('table', { class: 'comps' },
+        el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Comparable' }), el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: 'Market cap' }), el('th', { scope: 'col', text: 'mcap / TVL' }))),
+        el('tbody', null, (row.comps || []).map(function (cp) {
+          return el('tr', null,
+            el('td', { text: cp.name + (cp.category === row.category ? ' (same category)' : ' (' + (cp.category || 'Other') + ')') }),
+            el('td', { class: 'num', text: fmtUsd(cp.tvl_usd) }),
+            el('td', { class: 'num', text: fmtUsd(cp.mcap_usd) }),
+            el('td', { class: 'num', text: cp.ratio.toFixed(3) + 'x' })
+          );
+        }))
+      )
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
